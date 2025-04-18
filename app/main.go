@@ -10,9 +10,9 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 
-	l, err := net.Listen("tcp", "0.0.0.:4221")
+	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
-		fmt.Println("Failed to bind to port 4221")
+		fmt.Println("Failed to bind to port 4221", err.Error())
 		os.Exit(1)
 	}
 
