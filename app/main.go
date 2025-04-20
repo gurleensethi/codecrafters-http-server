@@ -22,7 +22,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	n, err := conn.Write([]byte("HTTP/1.1 200 ok\r\n\r\n"))
+	n, err := conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 	if err != nil {
 		fmt.Println("error writing data:", err.Error())
 		os.Exit(1)
