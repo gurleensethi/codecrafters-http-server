@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +29,79 @@ func main() {
 
 	defer conn.Close()
 
+	req, err := parseHttpRequest(conn)
+	if err != nil {
+		fmt.Println("error writing 404 response", err.Error())
+	}
+
+	pathRegex := regexp.MustCompile("/echo/(.+)")
+
+	matches := pathRegex.FindAllStringSubmatch(req.URL, -1)
+	if len(matches) == 0 {
+		err = writeResponse(conn, &response{
+			Status:     404,
+			StatusText: "Not Found",
+		})
+		if err != nil {
+			fmt.Println("error writing response")
+			os.Exit(1)
+		}
+		return
+	}
+
+	str := matches[0][1]
+
+	err = writeResponse(conn, &response{
+		Status:     200,
+		StatusText: "OK",
+		Headers: map[string]string{
+			"Content-Type":   "text/plain",
+			"Content-Length": strconv.FormatInt(int64(len(str)), 10),
+		},
+		Body: []byte(str),
+	})
+	if err != nil {
+		fmt.Println("error writing response")
+		os.Exit(1)
+	}
+}
+
+type request struct {
+	Method  string
+	URL     string
+	Headers map[string]string
+}
+
+type response struct {
+	Status     int
+	StatusText string
+	Headers    map[string]string
+	Body       []byte
+}
+
+func (r *response) Content() []byte {
+	buffer := bytes.NewBuffer([]byte{})
+
+	fmt.Fprintf(buffer, "HTTP/1.1 %d %s\r\n", r.Status, r.StatusText)
+
+	for key, value := range r.Headers {
+		fmt.Fprintf(buffer, "%s: %s\r\n", key, value)
+	}
+	fmt.Fprintf(buffer, "\r\n")
+
+	if r.Body != nil && len(r.Body) > 0 {
+		buffer.Write(r.Body)
+	}
+
+	return buffer.Bytes()
+}
+
+func writeResponse(conn net.Conn, resp *response) error {
+	_, err := conn.Write(resp.Content())
+	return err
+}
+
+func parseHttpRequest(conn net.Conn) (*request, error) {
 	buffer := make([]byte, 1024)
 
 	n, err := conn.Read(buffer)
@@ -46,21 +123,12 @@ func main() {
 	if statusLine != nil {
 		parts := strings.Split(string(statusLine), " ")
 		if len(parts) == 3 {
-			if parts[0] == "GET" && parts[1] == "/" {
-				fmt.Println("Found", parts)
-				_, err := conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-				if err != nil {
-					fmt.Println("error writing response", err.Error())
-				}
-
-				return
-			}
+			return &request{
+				Method: strings.ToLower(parts[0]),
+				URL:    parts[1],
+			}, nil
 		}
 	}
 
-	fmt.Println("not found")
-	_, err = conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
-	if err != nil {
-		fmt.Println("error writing 404 response", err.Error())
-	}
+	return nil, errors.New("invalid http request")
 }
