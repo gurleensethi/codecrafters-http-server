@@ -34,6 +34,18 @@ func main() {
 		fmt.Println("error writing 404 response", err.Error())
 	}
 
+	if req.URL == "/" {
+		err = writeResponse(conn, &response{
+			Status:     200,
+			StatusText: "OK",
+		})
+		if err != nil {
+			fmt.Println("error writing response")
+			os.Exit(1)
+		}
+		return
+	}
+
 	pathRegex := regexp.MustCompile("/echo/(.+)")
 
 	matches := pathRegex.FindAllStringSubmatch(req.URL, -1)
