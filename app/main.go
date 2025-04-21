@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -29,53 +28,88 @@ func main() {
 
 	defer conn.Close()
 
-	req, err := parseHttpRequest(conn)
-	if err != nil {
-		fmt.Println("error writing 404 response", err.Error())
+	r := router{
+		matchers: make([]*regexp.Regexp, 0),
+		handlers: make([]func(*request, []string) *response, 0),
 	}
 
-	if req.URL == "/" {
-		err = writeResponse(conn, &response{
+	r.AddRoute("^/echo/(.+)$", func(r *request, s []string) *response {
+		return &response{
 			Status:     200,
 			StatusText: "OK",
-		})
-		if err != nil {
-			fmt.Println("error writing response")
-			os.Exit(1)
+			Headers: map[string]string{
+				"Content-Type":   "text/plain",
+				"Content-Length": strconv.FormatInt(int64(len(s[0])), 10),
+			},
+			Body: []byte(s[0]),
 		}
-		return
-	}
-
-	pathRegex := regexp.MustCompile("/echo/(.+)")
-
-	matches := pathRegex.FindAllStringSubmatch(req.URL, -1)
-	if len(matches) == 0 {
-		err = writeResponse(conn, &response{
-			Status:     404,
-			StatusText: "Not Found",
-		})
-		if err != nil {
-			fmt.Println("error writing response")
-			os.Exit(1)
-		}
-		return
-	}
-
-	str := matches[0][1]
-
-	err = writeResponse(conn, &response{
-		Status:     200,
-		StatusText: "OK",
-		Headers: map[string]string{
-			"Content-Type":   "text/plain",
-			"Content-Length": strconv.FormatInt(int64(len(str)), 10),
-		},
-		Body: []byte(str),
 	})
+
+	r.AddRoute("^/$", func(r *request, pathMatches []string) *response {
+		return &response{
+			Status:     200,
+			StatusText: "OK",
+		}
+	})
+
+	r.AddRoute("^/user-agent$", func(r *request, s []string) *response {
+		return &response{
+			Status:     200,
+			StatusText: "OK",
+			Body:       []byte(r.Headers["user-agent"]),
+		}
+	})
+
+	req, err := parseHttpRequest(conn)
 	if err != nil {
-		fmt.Println("error writing response")
+		fmt.Println("error parsing http request", err.Error())
 		os.Exit(1)
 	}
+
+	err = r.HandlerRequest(conn, req)
+	if err != nil {
+		fmt.Println("error handling request", err.Error())
+	}
+}
+
+type router struct {
+	matchers []*regexp.Regexp
+	handlers []func(*request, []string) *response
+}
+
+func (r *router) AddRoute(path string, handler func(*request, []string) *response) {
+	r.matchers = append(r.matchers, regexp.MustCompile(path))
+	r.handlers = append(r.handlers, handler)
+}
+
+func (r *router) HandlerRequest(conn net.Conn, req *request) error {
+	for i, matcher := range r.matchers {
+		matches := matcher.FindAllStringSubmatch(req.URL, -1)
+		fmt.Println(matches)
+
+		if len(matches) > 0 {
+			var matchedPaths []string
+
+			for _, m := range matches {
+				if len(m) > 1 {
+					matchedPaths = append(matchedPaths, m[1])
+				}
+			}
+
+			handler := r.handlers[i]
+
+			resp := handler(req, matchedPaths)
+
+			_, err := conn.Write(resp.Content())
+			return err
+		}
+	}
+
+	_, err := conn.Write((&response{
+		Status:     404,
+		StatusText: "Not Found",
+	}).Content())
+	return err
 }
 
 type request struct {
@@ -108,11 +142,6 @@ func (r *response) Content() []byte {
 	return buffer.Bytes()
 }
 
-func writeResponse(conn net.Conn, resp *response) error {
-	_, err := conn.Write(resp.Content())
-	return err
-}
-
 func parseHttpRequest(conn net.Conn) (*request, error) {
 	buffer := make([]byte, 1024)
 
@@ -122,25 +151,65 @@ func parseHttpRequest(conn net.Conn) (*request, error) {
 		os.Exit(1)
 	}
 
+	type Section string
+
+	var (
+		SectionStatusLine Section = "status_line"
+		SectionHeader     Section = "header"
+		SectionBody       Section = "body"
+	)
+
 	var statusLine []byte
+	currentSection := SectionStatusLine
+	lastCLRF := -1
+
+	headers := make(map[string]string)
 
 	for i, c := range buffer[:n] {
-		// found first CRLF
-		if c == '\r' && i+1 < n && buffer[i+1] == '\n' {
-			statusLine = buffer[:i]
-			break
+		isCLRF := c == '\r' && i+1 < n && buffer[i+1] == '\n'
+		isContinuousCLRF := isCLRF && (i-2 == lastCLRF)
+
+		// we just ended headers
+		if isContinuousCLRF {
+			currentSection = SectionBody
+			continue
+		}
+
+		switch currentSection {
+		case SectionStatusLine:
+			if isCLRF {
+				statusLine = buffer[:i]
+				currentSection = SectionHeader
+			}
+		case SectionHeader:
+			if isCLRF {
+				header := buffer[lastCLRF+2 : i]
+
+				var key string
+				var value string
+
+				index := strings.IndexRune(string(header), ':')
+				if index == -1 {
+					key = strings.ToLower(string(header))
+				} else {
+					key = strings.ToLower(string(header[:index]))
+					value = strings.TrimSpace(string(header[index+1:]))
+				}
+
+				headers[key] = value
+			}
+		case SectionBody:
+		}
+
+		if isCLRF {
+			lastCLRF = i
 		}
 	}
 
-	if statusLine != nil {
-		parts := strings.Split(string(statusLine), " ")
-		if len(parts) == 3 {
-			return &request{
-				Method: strings.ToLower(parts[0]),
-				URL:    parts[1],
-			}, nil
-		}
-	}
-
-	return nil, errors.New("invalid http request")
+	parts := strings.Split(string(statusLine), " ")
+	return &request{
+		Method:  strings.ToLower(parts[0]),
+		URL:     parts[1],
+		Headers: headers,
+	}, nil
 }
