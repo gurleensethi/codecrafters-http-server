@@ -53,10 +53,16 @@ func main() {
 	})
 
 	r.AddRoute("^/user-agent$", func(r *request, s []string) *response {
+		body := r.Headers["user-agent"]
+
 		return &response{
 			Status:     200,
 			StatusText: "OK",
-			Body:       []byte(r.Headers["user-agent"]),
+			Body:       []byte(body),
+			Headers: map[string]string{
+				"Content-Type":   "text/plain",
+				"Content-Length": strconv.FormatInt(int64(len(body)), 10),
+			},
 		}
 	})
 
