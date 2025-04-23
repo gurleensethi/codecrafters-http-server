@@ -14,20 +14,6 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 
-	l, err := net.Listen("tcp", "0.0.0.0:4221")
-	if err != nil {
-		fmt.Println("Failed to bind to port 4221", err.Error())
-		os.Exit(1)
-	}
-
-	conn, err := l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
-	}
-
-	defer conn.Close()
-
 	r := router{
 		matchers: make([]*regexp.Regexp, 0),
 		handlers: make([]func(*request, []string) *response, 0),
@@ -66,15 +52,45 @@ func main() {
 		}
 	})
 
-	req, err := parseHttpRequest(conn)
+	srv := server{
+		router: r,
+	}
+	srv.Start()
+}
+
+type server struct {
+	router router
+}
+
+func (s *server) Start() {
+	fmt.Println("starting server...")
+
+	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
-		fmt.Println("error parsing http request", err.Error())
+		fmt.Println("Failed to bind to port 4221", err.Error())
 		os.Exit(1)
 	}
 
-	err = r.HandlerRequest(conn, req)
-	if err != nil {
-		fmt.Println("error handling request", err.Error())
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+		}
+
+		go func(conn net.Conn) {
+			defer conn.Close()
+
+			req, err := parseHttpRequest(conn)
+			if err != nil {
+				fmt.Println("error parsing http request", err.Error())
+				os.Exit(1)
+			}
+
+			err = s.router.HandlerRequest(conn, req)
+			if err != nil {
+				fmt.Println("error handling request", err.Error())
+			}
+		}(conn)
 	}
 }
 
@@ -91,7 +107,6 @@ func (r *router) AddRoute(path string, handler func(*request, []string) *respons
 func (r *router) HandlerRequest(conn net.Conn, req *request) error {
 	for i, matcher := range r.matchers {
 		matches := matcher.FindAllStringSubmatch(req.URL, -1)
-		fmt.Println(matches)
 
 		if len(matches) > 0 {
 			var matchedPaths []string
