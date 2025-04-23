@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -36,7 +37,7 @@ func main() {
 				"Content-Type":   "text/plain",
 				"Content-Length": strconv.FormatInt(int64(len(s[0])), 10),
 			},
-			Body: []byte(s[0]),
+			Body: bytes.NewBuffer([]byte(s[0])),
 		}
 	})
 
@@ -53,7 +54,7 @@ func main() {
 		return &response{
 			Status:     200,
 			StatusText: "OK",
-			Body:       []byte(body),
+			Body:       bytes.NewBuffer([]byte(body)),
 			Headers: map[string]string{
 				"Content-Type":   "text/plain",
 				"Content-Length": strconv.FormatInt(int64(len(body)), 10),
@@ -64,7 +65,7 @@ func main() {
 	r.AddRoute("^/files/(.+)$", func(r *request, s []string) *response {
 		filename := path.Join(*directoryFlag, s[0])
 
-		file, err := os.ReadFile(filename)
+		file, err := os.Open(filename)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return &response{
@@ -79,12 +80,14 @@ func main() {
 			}
 		}
 
+		stat, _ := file.Stat()
+
 		return &response{
 			Status:     200,
 			StatusText: "OK",
 			Body:       file,
 			Headers: map[string]string{
-				"Content-Length": strconv.FormatInt(int64(len(file)), 10),
+				"Content-Length": strconv.FormatInt(stat.Size(), 10),
 				"Content-Type":   "application/octet-stream",
 			},
 		}
@@ -181,7 +184,7 @@ type response struct {
 	Status     int
 	StatusText string
 	Headers    map[string]string
-	Body       []byte
+	Body       io.Reader
 }
 
 func (r *response) Content() []byte {
@@ -194,8 +197,13 @@ func (r *response) Content() []byte {
 	}
 	fmt.Fprintf(buffer, "\r\n")
 
-	if r.Body != nil && len(r.Body) > 0 {
-		buffer.Write(r.Body)
+	if r.Body != nil {
+		bytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			panic(err)
+		}
+
+		buffer.Write(bytes)
 	}
 
 	return buffer.Bytes()
