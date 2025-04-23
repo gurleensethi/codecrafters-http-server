@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -10,7 +12,13 @@ import (
 	"strings"
 )
 
+var (
+	directoryFlag = flag.String("directory", "", "")
+)
+
 func main() {
+	flag.Parse()
+
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 
@@ -48,6 +56,34 @@ func main() {
 			Headers: map[string]string{
 				"Content-Type":   "text/plain",
 				"Content-Length": strconv.FormatInt(int64(len(body)), 10),
+			},
+		}
+	})
+
+	r.AddRoute("^/files/(.+)$", func(r *request, s []string) *response {
+		filename := s[0]
+
+		file, err := os.ReadFile(filename)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return &response{
+					Status:     404,
+					StatusText: "Not Found",
+				}
+			}
+
+			return &response{
+				Status:     500,
+				StatusText: "Internal Error",
+			}
+		}
+
+		return &response{
+			Status:     200,
+			StatusText: "OK",
+			Body:       file,
+			Headers: map[string]string{
+				"Content-Length": strconv.FormatInt(int64(len(file)), 10),
 			},
 		}
 	})
