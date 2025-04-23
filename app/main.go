@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,7 +62,7 @@ func main() {
 	})
 
 	r.AddRoute("^/files/(.+)$", func(r *request, s []string) *response {
-		filename := s[0]
+		filename := path.Join(*directoryFlag, s[0])
 
 		file, err := os.ReadFile(filename)
 		if err != nil {
