@@ -85,6 +85,7 @@ func main() {
 			Body:       file,
 			Headers: map[string]string{
 				"Content-Length": strconv.FormatInt(int64(len(file)), 10),
+				"Content-Type":   "application/octet-stream",
 			},
 		}
 	})
