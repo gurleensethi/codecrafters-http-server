@@ -162,16 +162,14 @@ func (r *router) HandlerRequest(conn net.Conn, req *request) error {
 
 			resp := handler(req, matchedPaths)
 
-			_, err := conn.Write(resp.Content())
-			return err
+			return resp.WriteToConn(conn)
 		}
 	}
 
-	_, err := conn.Write((&response{
+	return (&response{
 		Status:     404,
 		StatusText: "Not Found",
-	}).Content())
-	return err
+	}).WriteToConn(conn)
 }
 
 type request struct {
@@ -187,26 +185,22 @@ type response struct {
 	Body       io.Reader
 }
 
-func (r *response) Content() []byte {
-	buffer := bytes.NewBuffer([]byte{})
-
-	fmt.Fprintf(buffer, "HTTP/1.1 %d %s\r\n", r.Status, r.StatusText)
+func (r *response) WriteToConn(conn net.Conn) error {
+	fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\n", r.Status, r.StatusText)
 
 	for key, value := range r.Headers {
-		fmt.Fprintf(buffer, "%s: %s\r\n", key, value)
+		fmt.Fprintf(conn, "%s: %s\r\n", key, value)
 	}
-	fmt.Fprintf(buffer, "\r\n")
+	fmt.Fprintf(conn, "\r\n")
 
 	if r.Body != nil {
-		bytes, err := io.ReadAll(r.Body)
+		_, err := io.Copy(conn, r.Body)
 		if err != nil {
-			panic(err)
+			return err
 		}
-
-		buffer.Write(bytes)
 	}
 
-	return buffer.Bytes()
+	return nil
 }
 
 func parseHttpRequest(conn net.Conn) (*request, error) {
