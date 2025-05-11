@@ -97,7 +97,7 @@ func main() {
 
 		return &response{
 			Status:     201,
-			StatusText: "OK",
+			StatusText: "Created",
 		}
 	})
 
