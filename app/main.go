@@ -25,11 +25,10 @@ func main() {
 	fmt.Println("Logs from your program will appear here!")
 
 	r := router{
-		matchers: make([]*regexp.Regexp, 0),
-		handlers: make([]func(*request, []string) *response, 0),
+		routes: make([]route, 0),
 	}
 
-	r.AddRoute("^/echo/(.+)$", func(r *request, s []string) *response {
+	r.AddRoute("GET", "^/echo/(.+)$", func(r *request, s []string) *response {
 		return &response{
 			Status:     200,
 			StatusText: "OK",
@@ -41,14 +40,14 @@ func main() {
 		}
 	})
 
-	r.AddRoute("^/$", func(r *request, pathMatches []string) *response {
+	r.AddRoute("GET", "^/$", func(r *request, pathMatches []string) *response {
 		return &response{
 			Status:     200,
 			StatusText: "OK",
 		}
 	})
 
-	r.AddRoute("^/user-agent$", func(r *request, s []string) *response {
+	r.AddRoute("GET", "^/user-agent$", func(r *request, s []string) *response {
 		body := r.Headers["user-agent"]
 
 		return &response{
@@ -62,7 +61,7 @@ func main() {
 		}
 	})
 
-	r.AddRoute("^/files/(.+)$", func(r *request, s []string) *response {
+	r.AddRoute("GET", "^/files/(.+)$", func(r *request, s []string) *response {
 		filename := path.Join(*directoryFlag, s[0])
 
 		file, err := os.Open(filename)
@@ -90,6 +89,15 @@ func main() {
 				"Content-Length": strconv.FormatInt(stat.Size(), 10),
 				"Content-Type":   "application/octet-stream",
 			},
+		}
+	})
+
+	r.AddRoute("POST", "^/files/(.+)$", func(r *request, s []string) *response {
+		fmt.Println(string(r.Body))
+
+		return &response{
+			Status:     201,
+			StatusText: "OK",
 		}
 	})
 
@@ -135,19 +143,31 @@ func (s *server) Start() {
 	}
 }
 
-type router struct {
-	matchers []*regexp.Regexp
-	handlers []func(*request, []string) *response
+type route struct {
+	method  string
+	matcher *regexp.Regexp
+	handler func(*request, []string) *response
 }
 
-func (r *router) AddRoute(path string, handler func(*request, []string) *response) {
-	r.matchers = append(r.matchers, regexp.MustCompile(path))
-	r.handlers = append(r.handlers, handler)
+type router struct {
+	routes []route
+}
+
+func (r *router) AddRoute(method, path string, handler func(*request, []string) *response) {
+	r.routes = append(r.routes, route{
+		method:  strings.ToLower(method),
+		matcher: regexp.MustCompile(path),
+		handler: handler,
+	})
 }
 
 func (r *router) HandlerRequest(conn net.Conn, req *request) error {
-	for i, matcher := range r.matchers {
-		matches := matcher.FindAllStringSubmatch(req.URL, -1)
+	for _, route := range r.routes {
+		if req.Method != route.method {
+			continue
+		}
+
+		matches := route.matcher.FindAllStringSubmatch(req.URL, -1)
 
 		if len(matches) > 0 {
 			var matchedPaths []string
@@ -158,9 +178,7 @@ func (r *router) HandlerRequest(conn net.Conn, req *request) error {
 				}
 			}
 
-			handler := r.handlers[i]
-
-			resp := handler(req, matchedPaths)
+			resp := route.handler(req, matchedPaths)
 
 			return resp.WriteToConn(conn)
 		}
@@ -176,6 +194,7 @@ type request struct {
 	Method  string
 	URL     string
 	Headers map[string]string
+	Body    []byte
 }
 
 type response struct {
@@ -220,12 +239,15 @@ func parseHttpRequest(conn net.Conn) (*request, error) {
 		SectionBody       Section = "body"
 	)
 
+	var body []byte
+	var contentLength int
 	var statusLine []byte
 	currentSection := SectionStatusLine
 	lastCLRF := -1
 
 	headers := make(map[string]string)
 
+loop:
 	for i, c := range buffer[:n] {
 		isCLRF := c == '\r' && i+1 < n && buffer[i+1] == '\n'
 		isContinuousCLRF := isCLRF && (i-2 == lastCLRF)
@@ -258,8 +280,14 @@ func parseHttpRequest(conn net.Conn) (*request, error) {
 				}
 
 				headers[key] = value
+
+				if strings.ToLower(key) == "content-length" {
+					contentLength, _ = strconv.Atoi(value)
+				}
 			}
 		case SectionBody:
+			body = buffer[i : i+contentLength+1]
+			break loop
 		}
 
 		if isCLRF {
@@ -268,9 +296,11 @@ func parseHttpRequest(conn net.Conn) (*request, error) {
 	}
 
 	parts := strings.Split(string(statusLine), " ")
+
 	return &request{
 		Method:  strings.ToLower(parts[0]),
 		URL:     parts[1],
 		Headers: headers,
+		Body:    body,
 	}, nil
 }
