@@ -301,6 +301,7 @@ loop:
 				}
 			}
 		case SectionBody:
+			// Currently i is pointing the `\n` in the last `\r\n` of the message
 			body = buffer[i+1 : i+contentLength+1]
 			break loop
 		}
