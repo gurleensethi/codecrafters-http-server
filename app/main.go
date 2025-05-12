@@ -93,7 +93,21 @@ func main() {
 	})
 
 	r.AddRoute("POST", "^/files/(.+)$", func(r *request, s []string) *response {
-		fmt.Println(string(r.Body))
+		file, err := os.Create(path.Join(*directoryFlag, s[0]))
+		if err != nil {
+			return &response{
+				Status:     500,
+				StatusText: "Internal Server Error",
+			}
+		}
+
+		_, err = file.Write(r.Body)
+		if err != nil {
+			return &response{
+				Status:     500,
+				StatusText: "Internal Server Error",
+			}
+		}
 
 		return &response{
 			Status:     201,
