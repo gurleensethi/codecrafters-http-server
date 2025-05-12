@@ -195,8 +195,14 @@ func (r *router) HandlerRequest(conn net.Conn, req *request) error {
 			resp := route.handler(req, matchedPaths)
 
 			// Check for compression
-			if req.Headers["accept-encoding"] == "gzip" {
-				resp.Headers["Content-Encoding"] = "gzip"
+			encodingHeader, ok := req.Headers["accept-encoding"]
+			if ok {
+				acceptedEncodings := strings.Split(encodingHeader, ",")
+				for _, encoding := range acceptedEncodings {
+					if strings.TrimSpace(encoding) == "gzip" {
+						resp.Headers["Content-Encoding"] = "gzip"
+					}
+				}
 			}
 
 			return resp.WriteToConn(conn)
