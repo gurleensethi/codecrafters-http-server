@@ -270,6 +270,7 @@ loop:
 		// we just ended headers
 		if isContinuousCLRF {
 			currentSection = SectionBody
+			i += 2
 			continue
 		}
 
@@ -301,7 +302,7 @@ loop:
 				}
 			}
 		case SectionBody:
-			body = buffer[i+1 : i+contentLength+1]
+			body = buffer[i : i+contentLength+1]
 			break loop
 		}
 
