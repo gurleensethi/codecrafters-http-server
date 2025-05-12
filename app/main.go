@@ -300,7 +300,7 @@ loop:
 				}
 			}
 		case SectionBody:
-			body = buffer[i : i+contentLength+1]
+			body = buffer[i+1 : i+contentLength+1]
 			break loop
 		}
 
