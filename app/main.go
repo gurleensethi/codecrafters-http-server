@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"flag"
 	"fmt"
@@ -193,15 +194,11 @@ func (r *router) HandlerRequest(conn net.Conn, req *request) error {
 			}
 
 			resp := route.handler(req, matchedPaths)
-
-			// Check for compression
 			encodingHeader, ok := req.Headers["accept-encoding"]
 			if ok {
-				acceptedEncodings := strings.Split(encodingHeader, ",")
-				for _, encoding := range acceptedEncodings {
-					if strings.TrimSpace(encoding) == "gzip" {
-						resp.Headers["Content-Encoding"] = "gzip"
-					}
+				err := resp.compressData(strings.Split(encodingHeader, ","))
+				if err != nil {
+					return err
 				}
 			}
 
@@ -227,6 +224,35 @@ type response struct {
 	StatusText string
 	Headers    map[string]string
 	Body       io.Reader
+}
+
+func (r *response) compressData(acceptedEncodings []string) error {
+	for _, encoding := range acceptedEncodings {
+		switch strings.TrimSpace(encoding) {
+		case "gzip":
+			buffer := bytes.NewBuffer([]byte{})
+			writer := gzip.NewWriter(buffer)
+			defer writer.Close()
+
+			_, err := io.Copy(writer, r.Body)
+			if err != nil {
+				return err
+			}
+
+			err = writer.Flush()
+			if err != nil {
+				return err
+			}
+
+			r.Body = buffer
+			r.Headers["Content-Encoding"] = "gzip"
+			r.Headers["Content-Length"] = strconv.FormatInt(int64(buffer.Len()), 10)
+
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func (r *response) WriteToConn(conn net.Conn) error {
