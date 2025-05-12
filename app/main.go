@@ -232,7 +232,6 @@ func (r *response) compressData(acceptedEncodings []string) error {
 		case "gzip":
 			buffer := bytes.NewBuffer([]byte{})
 			writer := gzip.NewWriter(buffer)
-			defer writer.Close()
 
 			_, err := io.Copy(writer, r.Body)
 			if err != nil {
@@ -244,9 +243,14 @@ func (r *response) compressData(acceptedEncodings []string) error {
 				return err
 			}
 
+			err = writer.Close()
+			if err != nil {
+				return err
+			}
+
 			r.Body = buffer
 			r.Headers["Content-Encoding"] = "gzip"
-			r.Headers["Content-Length"] = strconv.FormatInt(int64(buffer.Len()), 10)
+			r.Headers["Content-Length"] = strconv.Itoa(buffer.Len())
 
 			return nil
 		}
