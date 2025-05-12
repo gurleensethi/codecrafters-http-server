@@ -262,7 +262,7 @@ func parseHttpRequest(conn net.Conn) (*request, error) {
 	headers := make(map[string]string)
 
 loop:
-	for i := 0; i < n; {
+	for i := range n {
 		c := buffer[i]
 		isCLRF := c == '\r' && i+1 < n && buffer[i+1] == '\n'
 		isContinuousCLRF := isCLRF && (i-2 == lastCLRF)
@@ -270,7 +270,6 @@ loop:
 		// we just ended headers
 		if isContinuousCLRF {
 			currentSection = SectionBody
-			i += 2
 			continue
 		}
 
@@ -302,15 +301,13 @@ loop:
 				}
 			}
 		case SectionBody:
-			body = buffer[i : i+contentLength+1]
+			body = buffer[i+1 : i+contentLength+1]
 			break loop
 		}
 
 		if isCLRF {
 			lastCLRF = i
 		}
-
-		i++
 	}
 
 	parts := strings.Split(string(statusLine), " ")
