@@ -168,12 +168,24 @@ func (s *server) Start() {
 						return
 					}
 
-					err = s.router.HandleRequest(conn, req)
+					resp, err := s.router.HandleRequest(conn, req)
 					if err != nil {
 						fmt.Println("error handling request", err.Error())
 					}
 
-					if strings.ToLower(req.Headers["connection"]) == "close" {
+					closeConnection := strings.ToLower(req.Headers["connection"]) == "close"
+
+					if closeConnection {
+						resp.Headers["Connection"] = "close"
+					}
+
+					err = resp.WriteToConn(conn)
+					if err != nil {
+						fmt.Println(err)
+						os.Exit(1)
+					}
+
+					if closeConnection {
 						conn.Close()
 						return
 					}
@@ -205,7 +217,7 @@ func (r *router) AddRoute(method, path string, handler func(*request, []string) 
 	})
 }
 
-func (r *router) HandleRequest(conn net.Conn, req *request) error {
+func (r *router) HandleRequest(conn net.Conn, req *request) (*response, error) {
 	for _, route := range r.routes {
 		if req.Method != route.method {
 			continue
@@ -227,18 +239,18 @@ func (r *router) HandleRequest(conn net.Conn, req *request) error {
 			if ok {
 				err := resp.compressData(strings.Split(encodingHeader, ","))
 				if err != nil {
-					return err
+					return nil, err
 				}
 			}
 
-			return resp.WriteToConn(conn)
+			return resp, nil
 		}
 	}
 
-	return (&response{
+	return &response{
 		Status:     404,
 		StatusText: "Not Found",
-	}).WriteToConn(conn)
+	}, nil
 }
 
 type request struct {
