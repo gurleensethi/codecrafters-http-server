@@ -11,8 +11,10 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -20,6 +22,15 @@ var (
 )
 
 func main() {
+	if os.Getenv("DEBUG") == "1" {
+		go func() {
+			for {
+				time.Sleep(time.Second)
+				fmt.Println("Goroutines:", runtime.NumGoroutine())
+			}
+		}()
+	}
+
 	flag.Parse()
 
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -142,17 +153,35 @@ func (s *server) Start() {
 		}
 
 		go func(conn net.Conn) {
-			defer conn.Close()
+			reqCh := make(chan *request)
+			errCh := make(chan error)
 
-			req, err := parseHttpRequest(conn)
-			if err != nil {
-				fmt.Println("error parsing http request", err.Error())
-				os.Exit(1)
-			}
+			go parseRequestFromConnection(conn, reqCh, errCh)
 
-			err = s.router.HandlerRequest(conn, req)
-			if err != nil {
-				fmt.Println("error handling request", err.Error())
+			for {
+				select {
+				case req := <-reqCh:
+					if req == nil {
+						close(reqCh)
+						close(errCh)
+						conn.Close()
+						return
+					}
+
+					err = s.router.HandleRequest(conn, req)
+					if err != nil {
+						fmt.Println("error handling request", err.Error())
+					}
+
+					if strings.ToLower(req.Headers["connection"]) == "close" {
+						conn.Close()
+						return
+					}
+				case err := <-errCh:
+					conn.Close()
+					fmt.Println(err)
+					os.Exit(1)
+				}
 			}
 		}(conn)
 	}
@@ -176,7 +205,7 @@ func (r *router) AddRoute(method, path string, handler func(*request, []string) 
 	})
 }
 
-func (r *router) HandlerRequest(conn net.Conn, req *request) error {
+func (r *router) HandleRequest(conn net.Conn, req *request) error {
 	for _, route := range r.routes {
 		if req.Method != route.method {
 			continue
@@ -277,87 +306,98 @@ func (r *response) WriteToConn(conn net.Conn) error {
 	return nil
 }
 
-func parseHttpRequest(conn net.Conn) (*request, error) {
-	buffer := make([]byte, 1024)
+func parseRequestFromConnection(conn net.Conn, reqCh chan<- *request, errCh chan<- error) {
+	for {
+		buffer := make([]byte, 4096)
 
-	n, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Println("error reading conn: ", err.Error())
-		os.Exit(1)
-	}
+		n, err := conn.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				reqCh <- nil
+				return
+			}
 
-	type Section string
-
-	var (
-		SectionStatusLine Section = "status_line"
-		SectionHeader     Section = "header"
-		SectionBody       Section = "body"
-	)
-
-	var body []byte
-	var contentLength int
-	var statusLine []byte
-	currentSection := SectionStatusLine
-	lastCLRF := -1
-
-	headers := make(map[string]string)
-
-loop:
-	for i := range n {
-		c := buffer[i]
-		isCLRF := c == '\r' && i+1 < n && buffer[i+1] == '\n'
-		isContinuousCLRF := isCLRF && (i-2 == lastCLRF)
-
-		// we just ended headers
-		if isContinuousCLRF {
-			currentSection = SectionBody
-			continue
+			errCh <- fmt.Errorf("error reading conn: %v", err.Error())
+			return
 		}
 
-		switch currentSection {
-		case SectionStatusLine:
-			if isCLRF {
-				statusLine = buffer[:i]
-				currentSection = SectionHeader
+		type Section string
+
+		var (
+			SectionStatusLine Section = "status_line"
+			SectionHeader     Section = "header"
+			SectionBody       Section = "body"
+		)
+
+		var body []byte
+		var contentLength int
+		var statusLine []byte
+		currentSection := SectionStatusLine
+		lastCLRF := -1
+
+		headers := make(map[string]string)
+
+		for i := range n {
+			c := buffer[i]
+			isCLRF := c == '\r' && i+1 < n && buffer[i+1] == '\n'
+			isContinuousCLRF := isCLRF && (i-2 == lastCLRF)
+
+			// we just ended headers
+			if isContinuousCLRF {
+				currentSection = SectionBody
+				continue
 			}
-		case SectionHeader:
-			if isCLRF {
-				header := buffer[lastCLRF+2 : i]
 
-				var key string
-				var value string
+			switch currentSection {
+			case SectionStatusLine:
+				if isCLRF {
+					statusLine = buffer[:i]
+					currentSection = SectionHeader
+				}
+			case SectionHeader:
+				if isCLRF {
+					header := buffer[lastCLRF+2 : i]
 
-				index := strings.IndexRune(string(header), ':')
-				if index == -1 {
-					key = strings.ToLower(string(header))
-				} else {
-					key = strings.ToLower(string(header[:index]))
-					value = strings.TrimSpace(string(header[index+1:]))
+					var key string
+					var value string
+
+					index := strings.IndexRune(string(header), ':')
+					if index == -1 {
+						key = strings.ToLower(string(header))
+					} else {
+						key = strings.ToLower(string(header[:index]))
+						value = strings.TrimSpace(string(header[index+1:]))
+					}
+
+					headers[key] = value
+
+					if key == "content-length" {
+						contentLength, _ = strconv.Atoi(value)
+					}
+				}
+			case SectionBody:
+				// Currently i is pointing the `\n` in the last `\r\n` of the message
+				body = buffer[i+1 : i+contentLength+1]
+
+				parts := strings.Split(string(statusLine), " ")
+				reqCh <- &request{
+					Method:  strings.ToLower(parts[0]),
+					URL:     parts[1],
+					Headers: headers,
+					Body:    body,
 				}
 
-				headers[key] = value
-
-				if key == "content-length" {
-					contentLength, _ = strconv.Atoi(value)
-				}
+				currentSection = SectionStatusLine
+				lastCLRF = -1
+				headers = make(map[string]string)
+				body = []byte{}
+				statusLine = []byte{}
+				continue
 			}
-		case SectionBody:
-			// Currently i is pointing the `\n` in the last `\r\n` of the message
-			body = buffer[i+1 : i+contentLength+1]
-			break loop
-		}
 
-		if isCLRF {
-			lastCLRF = i
+			if isCLRF {
+				lastCLRF = i
+			}
 		}
 	}
-
-	parts := strings.Split(string(statusLine), " ")
-
-	return &request{
-		Method:  strings.ToLower(parts[0]),
-		URL:     parts[1],
-		Headers: headers,
-		Body:    body,
-	}, nil
 }
